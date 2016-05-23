@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"crypto/sha512"
 	"encoding/hex"
-	"fmt"
+	"math/big"
 
 	"github.com/dedis/crypto/abstract"
 	"github.com/dedis/crypto/nist"
+	"github.com/dedis/crypto/util"
 )
 
 const ReducedPrivateKeySize = 32
@@ -23,16 +24,29 @@ var primeOrder, _ = new(nist.Int).SetString("72370055773322622139731865630429942
 // Returns the modulo'd private key and the secret key corresponding
 // You can safely use : Point().Mul(nil,sec) after and you'll get a ed25519
 // formatted public key
-func Ed25519ScalarToSecret(suite abstract.Suite, private []byte) ([]byte, abstract.Secret) {
-	// take the modulo
-	privModulo := Modulo(suite, private)
-	// secret
-	sec := SliceToInt(suite, privModulo)
-	secMarshal := sec.LittleEndian(32, 32)
+func Ed25519ScalarToSecret(suite abstract.Suite, private []byte) abstract.Secret {
+	// secret modulo-d
+	sec := SliceToInt(suite, private)
+	//secMarshal := sec.LittleEndian(32, 32)
+	secMarshal := SecretToSlice(sec)
 	pruned := privateToDigest(secMarshal)
 	// go back to secret, now formatted as ed25519
-	secPruned := SliceToInt(suite, pruned)
-	return privModulo, secPruned
+	//secPruned := SliceToInt(suite, pruned)
+	base := big.NewInt(2)
+	exp := big.NewInt(256)
+	modulo := big.NewInt(0).Exp(base, exp, nil)
+	modulo.Sub(modulo, big.NewInt(1))
+	secPruned := nist.NewInt(0, modulo)
+	secPruned.SetLittleEndian(pruned[:32])
+	return secPruned
+}
+
+// Convert a SECRET into a PUBLIC POINT in Ed25519 format (digest + prunin)
+func AbtractSecretToPointEd25519Format(suite abstract.Suite, sec abstract.Secret) abstract.Point {
+	//buffSec := sec.(*nist.Int).LittleEndian(32, 32)
+	buffSec := SecretToSlice(sec)
+	pruned := Ed25519ScalarToSecret(suite, buffSec)
+	return suite.Point().Mul(nil, pruned)
 }
 
 func Ed25519ScalarToPublic(priv []byte) []byte {
@@ -41,7 +55,6 @@ func Ed25519ScalarToPublic(priv []byte) []byte {
 	digest[31] &= 127
 	digest[31] |= 64
 
-	fmt.Println("Digest Ed25519: ", hex.EncodeToString(digest[:32]))
 	var A ExtendedGroupElement
 	var hBytes [32]byte
 	copy(hBytes[:], digest[:])
@@ -65,21 +78,19 @@ func ModuleExtend(suite abstract.Suite, priKey, public []byte) []byte {
 	return append(Modulo(suite, priKey), public...)
 }
 
-func Modulo(suite abstract.Suite, priKey []byte) []byte {
-	i := SliceToInt(suite, priKey)
-	privReduced := i.LittleEndian(32, 32)
-	//privReduced, _ := i.MarshalBinary()
-	return privReduced
+func SecretToSlice(sec abstract.Secret) []byte {
+	secBuff := make([]byte, 32)
+	vBuff := sec.(*nist.Int).V.Bytes()
+	util.Reverse(secBuff[32-len(vBuff):], vBuff)
+	return secBuff
 }
 
-func Ed25519PrivateToPublic(suite abstract.Suite, priv []byte) []byte {
-	i := SliceToInt(suite, priv)
-	pub := suite.Point().Mul(nil, i)
-	buff, err := pub.MarshalBinary()
-	if err != nil {
-		panic("Aiiiee")
-	}
-	return buff
+func Modulo(suite abstract.Suite, priKey []byte) []byte {
+	i := SliceToInt(suite, priKey)
+	//privReduced := i.LittleEndian(32, 32)
+	privReduced := SecretToSlice(i)
+	//privReduced, _ := i.MarshalBinary()
+	return privReduced
 }
 
 func ReducedScalarToExtended(secret, public []byte) []byte {
@@ -94,7 +105,8 @@ func Abstract2Hex(s abstract.Marshaling) string {
 	var err error
 	switch s.(type) {
 	case abstract.Secret:
-		buff = s.(*nist.Int).LittleEndian(32, 32)
+		//buff = s.(*nist.Int).LittleEndian(32, 32)
+		buff = SecretToSlice(s.(abstract.Secret))
 	default:
 		buff, err = s.MarshalBinary()
 		if err != nil {

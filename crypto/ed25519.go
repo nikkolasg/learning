@@ -42,8 +42,8 @@ func testCosi() {
 	// Reason: abstract.Secret is already modulo, can't expand it again.
 	privKey1Modulo := Modulo(suite, priKey1)
 	privKey2Modulo := Modulo(suite, priKey2)
-	pubKey1 := Ed25519PrivateToPublic(suite, privKey1Modulo)
-	pubKey2 := Ed25519PrivateToPublic(suite, privKey2Modulo)
+	pubKey1 := Ed25519ScalarToPublic(privKey1Modulo)
+	pubKey2 := Ed25519ScalarToPublic(privKey2Modulo)
 	// Extend the privKey for giving it to ed25519
 	var privKey1ModuloExtended = ReducedScalarToExtended(privKey1Modulo, pubKey1)
 	var privKey2ModuloExtended = ReducedScalarToExtended(privKey2Modulo, pubKey2)
@@ -52,26 +52,35 @@ func testCosi() {
 	// get the equivalent to abstract.Secret
 	priKey1Int := SliceToInt(suite, privKey1Modulo)
 	priKey2Int := SliceToInt(suite, privKey2Modulo)
+	priKey1IntPruned := Ed25519ScalarToSecret(suite, privKey1Modulo)
+	priKey2IntPruned := Ed25519ScalarToSecret(suite, privKey2Modulo)
+	// get the key into abstract.Secret/Point form
+	abPubKey1 := suite.Point().Mul(nil, priKey1IntPruned)
+	abPubKey2 := suite.Point().Mul(nil, priKey2IntPruned)
+	aggPublic := suite.Point().Add(abPubKey1, abPubKey2)
+	abPubKeys := []abstract.Point{abPubKey1, abPubKey2}
+
+	fmt.Println("----------------- Public Keys -----------------\n")
+	fmt.Println("Abstract Pub 1 = ", Abstract2Hex(abPubKey1))
+	fmt.Println("Abstract Pub 2 = ", Abstract2Hex(abPubKey2))
+	fmt.Println("Abstract Pub Agg = ", Abstract2Hex(aggPublic))
+	fmt.Println("Ed25519 Pub 1  = ", hex.EncodeToString(pubKey1))
+	fmt.Println("Ed25519 Pub 2  = ", hex.EncodeToString(pubKey2))
+	//fmt.Println("Ed25519 Pub  Agg = ",
 
 	fmt.Println("\n---------------- Sign Ed25519 -----------------\n")
 	sigEd25519 := SignEd25519(msg, pubKeys, privKey1ModuloExtended, privKey2ModuloExtended)
 
 	fmt.Println("\n---------------- Sign Abstract ----------------\n")
-	// get the key into abstract.Secret/Point form
-	abPubKey1 := GeEd255192Abstract(suite, pubKey1)
-	abPubKey2 := GeEd255192Abstract(suite, pubKey2)
-	aggPublic := suite.Point().Add(abPubKey1, abPubKey2)
-	abPubKeys := []abstract.Point{abPubKey1, abPubKey2}
-
 	sigAbstract, aggCommit := SignAbstract(suite, msg, abPubKeys, priKey1Int, priKey2Int)
 
-	fmt.Println("\n\n------------------- 1- Verify Ed25519 Sig -----------\n")
+	fmt.Println("\n\n------------------- 1- Ed25519.Verify(Ed25519 Sig) -----------\n")
 	b := cosi.Verify(pubKeys, nil, msg, sigEd25519)
 	fmt.Println(" => valid ? ", b)
-	fmt.Println("\n------------------- 1- Verify Abstract Sig -----------\n")
+	fmt.Println("\n------------------- 1- Ed25519.Verify(Abstract Sig) -----------\n")
 	b = cosi.Verify(pubKeys, nil, msg, sigAbstract)
 	fmt.Println(" => valid ? ", b)
-	fmt.Println("\n------------------- 2- Verify Abstract --------------\n")
+	fmt.Println("\n------------------- 2- Abstract.Verify --------------\n")
 	b = VerifyAbstract(suite, aggPublic, aggCommit, msg, sigAbstract)
 	fmt.Println(" => valid ? ", b)
 
@@ -80,6 +89,7 @@ func testCosi() {
 func VerifyAbstract(suite abstract.Suite, aggPublic, aggCommit abstract.Point, msg, sig []byte) bool {
 	aggR := sig[:32]
 	sigS := sig[32:64]
+	mask := sig[64:]
 	hash := sha512.New()
 	aggPublicMarshal, _ := aggPublic.MarshalBinary()
 	aggCommitMarshal, _ := aggCommit.MarshalBinary()
@@ -111,6 +121,7 @@ func VerifyAbstract(suite abstract.Suite, aggPublic, aggCommit abstract.Point, m
 	fmt.Println("Abstract Verify sig(S) = ", hex.EncodeToString(sigS))
 	fmt.Println("Abstract Verify sig(R) = ", hex.EncodeToString(aggR))
 	fmt.Println("Abstract Verify checkR = ", Abstract2Hex(checkR))
+	fmt.Println("Abstract Verify Mask = ", hex.EncodeToString(mask))
 
 	return bytes.Equal(checkRMarshal, aggR)
 }
@@ -129,8 +140,6 @@ func SignAbstract(suite abstract.Suite, msg []byte, pubKeys []abstract.Point, pr
 		panic(err)
 	}
 	aggPublicKey := aggregatePublicKey(suite, pubKeys)
-	negAggPublicKey := suite.Point().Neg(aggPublicKey)
-	fmt.Println("\n HIJACK MINUS AGGPUBLIC = ", Abstract2Hex(negAggPublicKey), "\n")
 	aggCommit := aggregatePublicKey(suite, []abstract.Point{commit1, commit2})
 
 	fmt.Println("----------- Cosign Abstract 1 ------------")
@@ -161,13 +170,14 @@ func AggregateSignatureAbstract(suite abstract.Suite, aggCommit abstract.Point, 
 	}
 
 	fmt.Println("Abstract Sign AggSig = ", Abstract2Hex(agg))
-	// no mask for the moment
 	sig := agg.(*nist.Int).LittleEndian(32, 32)
 	// R || S
 	comm, _ := aggCommit.MarshalBinary()
-	final := make([]byte, ed25519.SignatureSize)
+	final := make([]byte, ed25519.SignatureSize+1)
+	mask := []byte{0}
 	copy(final[:], comm)
 	copy(final[32:64], sig)
+	copy(final[64:], mask)
 	return final
 }
 
@@ -228,6 +238,7 @@ func CommitAbstract(suite abstract.Suite, rand io.Reader) (abstract.Point, abstr
 	if err != nil {
 		return nil, nil, err
 	}
+
 	secret := SliceToInt(suite, secretFull[:])
 	public := suite.Point().Mul(nil, secret)
 	return public, secret, nil

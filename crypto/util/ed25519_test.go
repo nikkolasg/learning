@@ -8,6 +8,7 @@ import (
 
 	"github.com/bford/golang-x-crypto/ed25519"
 	cryptoEd "github.com/dedis/crypto/edwards/ed25519"
+	"github.com/dedis/crypto/nist"
 )
 
 // is ScReduce is the same as modulo ?
@@ -97,7 +98,7 @@ func TestScalarToPublic(t *testing.T) {
 
 	// convert the modulo-d private key into a nist.Int
 	//sec := SliceToInt(suite, privKey1Modulo[:])
-	sec := SliceToInt(suite, priKey1)
+	sec := SliceToInt(suite, privKey1Modulo[:])
 	// marshal it
 	secMarshal := sec.LittleEndian(32, 32)
 	// digest it and prune it
@@ -110,23 +111,27 @@ func TestScalarToPublic(t *testing.T) {
 	// p1 != p2
 	// can't get the right private / public key
 	fmt.Println("\n WARNING \n")
-	secPruned := SliceToInt(suite, digest[32:])
+	secPruned := nist.NewInt(0, nil)
+	secPruned.SetLittleEndian(digest[:32])
+	//secPruned := SliceToInt(suite, digest[32:])
 	fmt.Println("\n WARNING \n")
 	// multiply by the base
 	pubPoint := suite.Point().Mul(nil, secPruned)
 	pubPointMarshal, _ := pubPoint.MarshalBinary()
+	if !bytes.Equal(pubPointMarshal, pubKey1Modulo) {
+		t.Error("Not equal")
+	}
+
 	t.Log("Digest - Abstract: ", hex.EncodeToString(digest))
 	t.Log("Digest- SecPruned: ", Abstract2Hex(secPruned))
 	t.Log("Modulo - ed25519: ", hex.EncodeToString(privKey1Modulo[:]))
 	t.Log("Moduloe - Abstract: ", hex.EncodeToString(secMarshal))
 	t.Log("pubPoint = ", Abstract2Hex(pubPoint))
 	t.Log("pubKey1Modulo = ", hex.EncodeToString(pubKey1Modulo))
-	_, s1 := Ed25519ScalarToSecret(suite, priKey1)
+	s1 := Ed25519ScalarToSecret(suite, privKey1Modulo[:])
 	po1 := suite.Point().Mul(nil, s1)
 	t.Log("Method = ", Abstract2Hex(po1))
-	if !bytes.Equal(pubPointMarshal, pubKey1Modulo) {
-		t.Error("Not equal")
-	}
+
 	/*pubSecModulo := suite.Point().Mul(nil, sec)*/
 	//pubSecModuloMarshal, _ := pubSecModulo.MarshalBinary()
 	//t.Log("pubKey1Modulo = ", hex.EncodeToString(pubKey1Modulo))
